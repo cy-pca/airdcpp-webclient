@@ -7,8 +7,8 @@ name: cvcpkg publish
 # The bundle is built as cvcpkg-recipe.yml builds it (ubuntu-22.04 for cvcpkg's glibc 2.35 floor,
 # GCC 12), with recipes/airdcpp-webclient/test.sh run on the staged tree before the pack, and its
 # dependencies taken from cvcpkg.org only: a bundle must never need something the registry cannot
-# give the person installing it. So it waits for leveldb and websocketpp to be on cvcpkg.org
-# (cy-pca/cvcpkg#623). After publishing, it is installed from cvcpkg.org into an empty prefix and
+# give the person installing it. So it waits for leveldb, websocketpp and airdcpp-webui to be on
+# cvcpkg.org. After publishing, it is installed from cvcpkg.org into an empty prefix and
 # its test.sh runs again there.
 #
 # The token is the CVCPKG_PUBLISHER_TOKEN repository secret: a cvcpkg.org publisher that is a
@@ -41,9 +41,9 @@ jobs:
       - name: Dependencies (cvcpkg.org only)
         run: |
           set -euo pipefail
-          for dep in leveldb websocketpp; do
+          for dep in leveldb websocketpp airdcpp-webui; do
             cvcpkg info "$dep" >/dev/null 2>&1 \
-              || { echo "::error::$dep is not on cvcpkg.org yet (cy-pca/cvcpkg#623); publishing nothing"; exit 1; }
+              || { echo "::error::$dep is not on cvcpkg.org yet; publishing nothing"; exit 1; }
           done
           cvcpkg install-deps airdcpp-webclient --recipes-dir recipes \
             --prefix "$RUNNER_TEMP/prefix" --config release --link shared \

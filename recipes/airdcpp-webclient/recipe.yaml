@@ -36,6 +36,11 @@ depends:
   build:
     - cmake
     - ninja
+    # Runs upstream's version and string-table generators.
+    - python312
+    # Copied to share/airdcpp/web-resources/.
+    - name: airdcpp-webui
+      version: "==2.14.0"
     # Header-only, compiled in.
     - name: websocketpp
       version: "==0.8.2"
@@ -71,9 +76,11 @@ abi:
 
 toolchain:
   note: >-
-    GCC 12 or newer (upstream's floor; C++20) and a python3 on PATH, which upstream's build runs
-    to generate its version and string tables. The Web UI is not compiled: build.sh unpacks the
-    published npm package, the same dist/ upstream's own install step copies.
+    GCC 12 or newer (upstream's floor; C++20). Everything else is a cvcpkg package: build.sh runs
+    cmake, ninja and python (python312, for upstream's version and string-table generators) from
+    the build or dependency prefix and stops if they are missing there. The Web UI is not
+    compiled: cvcpkg's airdcpp-webui is the published npm package's dist/, the same files
+    upstream's own install step copies.
 
 notes:
   - title: "bin/airdcppd is a launcher"
@@ -83,12 +90,11 @@ notes:
       is unpacked elsewhere, so bin/airdcppd runs it with --web-resources set to the prefix's
       share/airdcpp/web-resources/ (unless the command line already sets it) and passes every
       other argument through. Settings go where upstream puts them: -c=DIR, else ~/.airdc++/.
-  - title: "Web UI from the npm registry, pinned"
+  - title: "Web UI from cvcpkg's airdcpp-webui"
     description: >-
-      airdcpp-webui 2.14.0 is the package upstream's INSTALL_WEB_UI step fetches with npm.
-      build.sh downloads the same tarball from registry.npmjs.org and checks its sha256 (the
-      registry's sha512 integrity for it was checked when the pin was written), so the build
-      needs no npm. INSTALL_WEB_UI stays off.
+      airdcpp-webui 2.14.0 is the package upstream's INSTALL_WEB_UI step fetches with npm;
+      cvcpkg packages its dist/ (share/airdcpp-webui/), and build.sh copies it into this bundle's
+      share/airdcpp/web-resources/, so the build needs no npm or network. INSTALL_WEB_UI stays off.
   - title: "Optional features off"
     description: >-
       NAT-PMP (libnatpmp is not on cvcpkg) and Intel TBB are off; upstream's portable build

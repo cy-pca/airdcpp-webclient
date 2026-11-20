@@ -9,10 +9,11 @@ name: cvcpkg recipe
 # ubuntu-22.04 with GCC 12: cvcpkg's linux bundles must start on glibc 2.35, so `cvcpkg pack`
 # refuses one built on a newer glibc (24.04 has 2.39), and AirDC++ needs GCC 12 or newer for C++20.
 #
-# leveldb and websocketpp, which AirDC++ needs, have recipes in cy-pca/cvcpkg (#623) but are not
-# on cvcpkg.org yet. Until they are, this builds them from that commit's recipes
-# (CVCPKG_DEPS_REF), overlaid with --recipes-dir; once cvcpkg.org has them the overlay is unused
-# and can go.
+# Three of AirDC++'s dependencies have recipes in cy-pca/cvcpkg but are not on cvcpkg.org yet:
+# leveldb and websocketpp (#623, merged) and airdcpp-webui (a follow-up pull request). Until they
+# are published, this builds them from CVCPKG_DEPS_REF's recipes, overlaid with --recipes-dir;
+# once cvcpkg.org has them the overlay is unused and can go. Every other dependency and tool
+# (cmake, ninja, python312) is installed from cvcpkg.org.
 #
 # GitHub-hosted runners only: this repository is public, and a pull request's workflows must
 # never reach self-hosted runners.
@@ -39,8 +40,9 @@ permissions:
   contents: read
 
 env:
-  # cy-pca/cvcpkg#623, merged (leveldb 1.23, websocketpp 0.8.2).
-  CVCPKG_DEPS_REF: 80255a6cc73ded9eab0eb2e7927affa9400d774b
+  # cy-pca/cvcpkg master with #623 (leveldb, websocketpp) plus the airdcpp-webui recipe (branch
+  # recipes-wtl-minizip-airdcpp-webui).
+  CVCPKG_DEPS_REF: 9c638dd74e952577e820705f48a737114c5e22bc
   CC: gcc-12
   CXX: g++-12
 
@@ -50,7 +52,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: leveldb and websocketpp recipes (cy-pca/cvcpkg#623)
+      - name: Recipes not on cvcpkg.org yet (cy-pca/cvcpkg)
         uses: actions/checkout@v4
         with:
           repository: cy-pca/cvcpkg
@@ -61,8 +63,9 @@ jobs:
             recipes/_common
             recipes/leveldb
             recipes/websocketpp
+            recipes/airdcpp-webui
       - uses: ./.github/actions/setup-cvcpkg
-      - name: Dependencies (cvcpkg.org; leveldb and websocketpp from source until published)
+      - name: Dependencies (cvcpkg.org; the unpublished ones from source)
         run: |
           set -euo pipefail
           "$CXX" --version | head -1
