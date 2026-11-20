@@ -53,6 +53,8 @@ depends:
     - name: miniupnpc
     - name: leveldb
     - name: libmaxminddb
+    # macOS's libc has no iconv, so upstream's find_package(Iconv) links a library: cvcpkg's.
+    - { name: iconv, platforms: [macos] }
   host_tools: []
 
 build:

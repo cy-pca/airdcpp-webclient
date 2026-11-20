@@ -13,7 +13,8 @@ name: cvcpkg recipe
 # before anything is installed, as cy-pca/cvcpkg's own macOS CI does, so nothing can find its
 # cmake, ninja, python, pkg-config, boost or openssl. The job fails if cmake, ninja or python
 # resolve anywhere but the cvcpkg prefix, and if the packed bundle loads a library from anywhere
-# but itself, its dependencies (@rpath) or macOS.
+# but itself, its dependencies (@rpath) or macOS. test.sh then runs once more on the unpacked
+# bundle with only the recipe's declared runtime dependencies beside it.
 #
 # Any dependency cvcpkg.org does not have yet (airdcpp-webui, merged in cy-pca/cvcpkg#630, until
 # its bundle is published) is built from cy-pca/cvcpkg's recipes at CVCPKG_DEPS_REF, overlaid
@@ -206,3 +207,37 @@ jobs:
             done
           done < <(find "$x" -type f)
           [ ! -e "$x/.bad" ]
+      # The build prefix holds every build tool's dependencies too (python312 brings iconv,
+      # sqlite, ...), so test.sh passing there does not prove the recipe declares everything
+      # the daemon loads. Here it runs again on the unpacked bundle with a prefix holding only
+      # the recipe's macOS runtime dependencies and theirs.
+      - name: Test the bundle on its declared runtime dependencies alone
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/runtime"
+          deps=$(python -I -c '
+          import sys, yaml
+          for d in yaml.safe_load(open(sys.argv[1]))["depends"]["runtime"]:
+              d = d if isinstance(d, dict) else {"name": d}
+              if "macos" in d.get("platforms", ["macos"]):
+                  print(d["name"])
+          ' recipes/airdcpp-webclient/recipe.yaml)
+          registry=""; unpublished=""
+          for d in $deps; do
+            if cvcpkg info "$d" >/dev/null 2>&1; then registry="$registry $d"; else unpublished="$unpublished $d"; fi
+          done
+          echo "from cvcpkg.org:$registry; not published yet:${unpublished:- none}"
+          # shellcheck disable=SC2086
+          cvcpkg install $registry --prefix "$runtime" --config release --link shared \
+            --no-fallback-to-source
+          # Not on cvcpkg.org yet (leveldb): its dylibs from the build prefix, by name.
+          for d in $unpublished; do
+            n=0
+            for f in "$RUNNER_TEMP/prefix/lib/lib$d".*dylib; do
+              [ -e "$f" ] || continue
+              cp -a "$f" "$runtime/lib/"; n=$((n + 1))
+            done
+            [ "$n" -gt 0 ] || { echo "::error::no lib$d dylib in the build prefix"; exit 1; }
+          done
+          CVC_INSTALL_DIR="$RUNNER_TEMP/unpacked" CVC_DEPS_PREFIX="$runtime" \
+            bash recipes/airdcpp-webclient/test.sh
