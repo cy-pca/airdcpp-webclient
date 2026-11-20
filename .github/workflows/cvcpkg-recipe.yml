@@ -9,6 +9,12 @@ name: cvcpkg recipe
 # ubuntu-22.04 with GCC 12: cvcpkg's linux bundles must start on glibc 2.35, so `cvcpkg pack`
 # refuses one built on a newer glibc (24.04 has 2.39), and AirDC++ needs GCC 12 or newer for C++20.
 #
+# macos-15 (arm64) with Apple clang: the runner image's Homebrew is taken off PATH and moved aside
+# before anything is installed, as cy-pca/cvcpkg's own macOS CI does, so nothing can find its
+# cmake, ninja, python, pkg-config, boost or openssl. The job fails if cmake, ninja or python
+# resolve anywhere but the cvcpkg prefix, and if the packed bundle loads a library from anywhere
+# but itself, its dependencies (@rpath) or macOS.
+#
 # Any dependency cvcpkg.org does not have yet (airdcpp-webui, merged in cy-pca/cvcpkg#630, until
 # its bundle is published) is built from cy-pca/cvcpkg's recipes at CVCPKG_DEPS_REF, overlaid
 # with --recipes-dir; --fallback-to-source only builds what the registry lacks. Once cvcpkg.org
@@ -81,3 +87,122 @@ jobs:
             --prefix "$RUNNER_TEMP/prefix" --config release --link shared --output-dir dist
           ls -l dist/
           ls dist/airdcpp-webclient-2.14.0+cvc.*-linux-x86_64-release-shared.tar.gz
+
+  airdcpp-webclient-macos:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recipes not on cvcpkg.org yet (cy-pca/cvcpkg)
+        uses: actions/checkout@v4
+        with:
+          repository: cy-pca/cvcpkg
+          ref: ${{ env.CVCPKG_DEPS_REF }}
+          path: .cvcpkg-deps
+          persist-credentials: false
+          sparse-checkout: |
+            recipes/_common
+            recipes/leveldb
+            recipes/snappy
+            recipes/websocketpp
+            recipes/airdcpp-webui
+      # The image's Homebrew (/opt/homebrew on Apple Silicon) puts cmake, ninja, python, pkgconf,
+      # boost, openssl and more on PATH and in CMake's default search roots. Off PATH for every
+      # later step, and moved aside, so nothing finds any of it whatever looks. Moving it is only
+      # safe on an ephemeral GitHub-hosted runner.
+      - name: Remove Homebrew from the environment
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::refusing to move Homebrew aside on a ${RUNNER_ENVIRONMENT:-unknown} runner"
+            exit 1
+          fi
+          brew_dir() {
+            case "$1" in
+              /opt/homebrew|/opt/homebrew/*) return 0 ;;
+              /usr/local/Homebrew|/usr/local/Homebrew/*|/usr/local/Cellar|/usr/local/Cellar/*) return 0 ;;
+              /usr/local/opt|/usr/local/opt/*|/usr/local/Caskroom|/usr/local/Caskroom/*) return 0 ;;
+              /usr/local|/usr/local/*) [ -d /usr/local/Homebrew ] ;;
+              *) return 1 ;;
+            esac
+          }
+          clean=""
+          set -f; IFS=:
+          for d in $PATH; do
+            [ -n "$d" ] || continue
+            if brew_dir "$d"; then echo "dropping from PATH: $d"; continue; fi
+            clean="${clean:+$clean:}$d"
+          done
+          unset IFS; set +f
+          echo "PATH=$clean" >> "$GITHUB_ENV"
+          for d in /opt/homebrew /usr/local/Homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then
+              sudo mv "$d" "$d.hidden-from-builds"
+              echo "moved aside: $d"
+            fi
+          done
+      - uses: ./.github/actions/setup-cvcpkg
+      - name: Dependencies (cvcpkg.org; the unpublished ones from source)
+        run: |
+          set -euo pipefail
+          "$CXX" --version | head -1
+          cvcpkg install-deps airdcpp-webclient \
+            --recipes-dir .cvcpkg-deps/recipes --recipes-dir recipes \
+            --prefix "$RUNNER_TEMP/prefix" --config release --link shared \
+            --fallback-to-source --include-host-tools
+      - name: Check the build tools come from cvcpkg
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/prefix"
+          rc=0
+          if command -v brew >/dev/null 2>&1; then
+            echo "::error::Homebrew is still reachable: $(command -v brew)"; rc=1
+          fi
+          # PATH as cvcpkg gives the build, the prefix first; build.sh itself runs cmake, ninja
+          # and python3.12 from the prefix by path.
+          export PATH="$prefix/bin:$PATH"
+          for t in cmake ninja python3.12; do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$prefix/bin/"*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($prefix/bin)"; rc=1 ;;
+            esac
+          done
+          exit "$rc"
+      - name: Build, test and pack
+        run: |
+          set -euo pipefail
+          cvcpkg pack airdcpp-webclient --local \
+            --recipes-dir .cvcpkg-deps/recipes --recipes-dir recipes \
+            --prefix "$RUNNER_TEMP/prefix" --config release --link shared --output-dir dist
+          ls -l dist/
+          ls dist/airdcpp-webclient-2.14.0+cvc.*-macos-arm64-release-shared.tar.*
+      - name: Check the bundle loads only itself, its dependencies and macOS
+        run: |
+          set -euo pipefail
+          x="$RUNNER_TEMP/unpacked"
+          mkdir -p "$x"
+          for a in dist/airdcpp-webclient-2.14.0+cvc.*-macos-arm64-release-shared.tar.*; do
+            tar -xf "$a" -C "$x"
+          done
+          rc=0
+          while IFS= read -r f; do
+            case "$(file -b "$f")" in *Mach-O*) ;; *) continue ;; esac
+            echo "== ${f#"$x"/}"
+            otool -L "$f" | tail -n +2 | awk '{print $1}' | while read -r dep; do
+              case "$dep" in
+                @rpath/*|@loader_path/*|/usr/lib/*|/System/*) echo "   $dep" ;;
+                *) echo "::error::${f#"$x"/} loads $dep"; echo bad >> "$x/.bad" ;;
+              esac
+            done
+            otool -l "$f" | awk '/cmd LC_RPATH/ {getline; getline; print $2}' | while read -r rp; do
+              case "$rp" in
+                @loader_path*|@executable_path*) echo "   rpath $rp" ;;
+                *) echo "::error::${f#"$x"/} has rpath $rp"; echo bad >> "$x/.bad" ;;
+              esac
+            done
+          done < <(find "$x" -type f)
+          [ ! -e "$x/.bad" ]
