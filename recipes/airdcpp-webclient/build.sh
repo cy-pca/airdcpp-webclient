@@ -2,7 +2,8 @@
 # airdcpp-webclient: the daemon from upstream's source (CMake), the Web UI from cvcpkg's
 # airdcpp-webui package, and the bin/airdcppd launcher. See the recipe's notes for why each piece
 # is where it is. Every input but the compiler is a cvcpkg package: cmake, ninja and python
-# (python312) run from the build or dependency prefix, never the machine's copies.
+# (python312) run from the build or dependency prefix, never the machine's copies. Linux and macOS;
+# cvcpkg runs this with macOS's own /bin/bash 3.2 there.
 set -euo pipefail
 
 : "${CVC_SOURCE_DIR:?CVC_SOURCE_DIR must be set}"
@@ -11,7 +12,11 @@ set -euo pipefail
 : "${CVC_DEPS_PREFIX:?CVC_DEPS_PREFIX must be set}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CVC_JOBS="${CVC_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+CVC_JOBS="${CVC_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+case "${CVC_PLATFORM:-$(uname -s | tr '[:upper:]' '[:lower:]')}" in
+  macos|darwin) macos=1 ;;
+  *) macos="" ;;
+esac
 case "$(echo "${CVC_BUILD_TYPE:-release}" | tr '[:upper:]' '[:lower:]')" in
   debug) BUILD_TYPE=Debug ;;
   *) BUILD_TYPE=Release ;;
@@ -39,6 +44,14 @@ webui_license="$(cvc_file share/licenses/airdcpp-webui/LICENSE airdcpp-webui)"
 "$cmake_bin" --version | head -1
 echo "cmake ${cmake_bin}; ninja ${ninja_bin}; python ${python_bin}; Web UI ${webui_dir}"
 
+# bin/ (where upstream installs the daemon), libexec/airdcpp-webclient/ (where it ends up) and lib/
+# all reach lib/.
+if [[ -n "$macos" ]]; then
+  install_rpath='@loader_path/../lib;@loader_path/../../lib'
+else
+  install_rpath='$ORIGIN/../lib;$ORIGIN/../../lib'
+fi
+
 prefix_path="${CVC_DEPS_PREFIX}"
 if [[ -n "${CVC_BUILD_PREFIX:-}" && "${CVC_BUILD_PREFIX}" != "${CVC_DEPS_PREFIX}" ]]; then
   prefix_path="${CVC_DEPS_PREFIX};${CVC_BUILD_PREFIX}"
@@ -61,9 +74,28 @@ fi
   -DSTRIP=OFF \
   -DRESOURCE_DIRECTORY=/usr/share/airdcpp/ \
   -DGLOBAL_CONFIG_DIRECTORY=/etc/airdcpp/ \
-  -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib;$ORIGIN/../../lib'
+  -DCMAKE_INSTALL_RPATH="${install_rpath}"
 "$cmake_bin" --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 "$cmake_bin" --install "${CVC_BUILD_DIR}"
+
+# On Apple, upstream installs the daemon as an application bundle, airdcppd.app, at the prefix root,
+# and libairdcpp and libairdcpp-webapi into "AirDC++;Web;Client.app/Contents/MacOS" (its
+# PROJECT_NAME_GLOBAL is a CMake list there). The bundle layout only gets in the way of a daemon,
+# so the daemon and the libraries move to where they are on Linux and the bundles go.
+if [[ -n "$macos" ]]; then
+  app_bin="${CVC_INSTALL_DIR}/airdcppd.app/Contents/MacOS/airdcppd"
+  test -f "$app_bin" || { echo "airdcpp-webclient: no $app_bin after the install" >&2; exit 1; }
+  install -d "${CVC_INSTALL_DIR}/bin" "${CVC_INSTALL_DIR}/lib"
+  mv "$app_bin" "${CVC_INSTALL_DIR}/bin/airdcppd"
+  found=""
+  for lib in "${CVC_INSTALL_DIR}"/*.app/Contents/MacOS/libairdcpp*.dylib; do
+    [[ -e "$lib" || -L "$lib" ]] || continue
+    mv "$lib" "${CVC_INSTALL_DIR}/lib/"
+    found=1
+  done
+  [[ -n "$found" ]] || { echo "airdcpp-webclient: no libairdcpp*.dylib after the install" >&2; exit 1; }
+  rm -rf "${CVC_INSTALL_DIR}"/*.app
+fi
 
 # The daemon moves to libexec/; bin/airdcppd becomes the launcher.
 install -d "${CVC_INSTALL_DIR}/libexec/airdcpp-webclient"
