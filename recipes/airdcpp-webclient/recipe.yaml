@@ -99,8 +99,8 @@ notes:
     description: >-
       NAT-PMP (libnatpmp is not on cvcpkg) and Intel TBB are off; upstream's portable build
       leaves TBB out as well. UPnP port mapping (miniupnpc) and GeoIP (libmaxminddb) are on.
-      LevelDB comes from cvcpkg's leveldb, which is built without Snappy: a fresh config works,
-      a hash database copied from another install that holds Snappy-compressed blocks does not.
+      LevelDB comes from cvcpkg's leveldb, built with Snappy (cvcpkg's snappy) since 1.23+cvc.2, so a
+      hash database copied from another install, with Snappy-compressed blocks, reads as it is.
   - title: "Platforms"
     description: >-
       linux-x86_64 is built, smoke-tested and packed in cy-pca/airdcpp-webclient's CI

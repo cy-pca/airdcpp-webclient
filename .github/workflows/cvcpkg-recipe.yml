@@ -9,10 +9,10 @@ name: cvcpkg recipe
 # ubuntu-22.04 with GCC 12: cvcpkg's linux bundles must start on glibc 2.35, so `cvcpkg pack`
 # refuses one built on a newer glibc (24.04 has 2.39), and AirDC++ needs GCC 12 or newer for C++20.
 #
-# Three of AirDC++'s dependencies have recipes in cy-pca/cvcpkg but are not on cvcpkg.org yet:
-# leveldb and websocketpp (#623, merged) and airdcpp-webui (a follow-up pull request). Until they
-# are published, this builds them from CVCPKG_DEPS_REF's recipes, overlaid with --recipes-dir;
-# once cvcpkg.org has them the overlay is unused and can go. Every other dependency and tool
+# Any dependency cvcpkg.org does not have yet (airdcpp-webui, merged in cy-pca/cvcpkg#630, until
+# its bundle is published) is built from cy-pca/cvcpkg's recipes at CVCPKG_DEPS_REF, overlaid
+# with --recipes-dir; --fallback-to-source only builds what the registry lacks. Once cvcpkg.org
+# has them all, the overlay is unused and can go. Every other dependency and tool
 # (cmake, ninja, python312) is installed from cvcpkg.org.
 #
 # GitHub-hosted runners only: this repository is public, and a pull request's workflows must
@@ -40,9 +40,8 @@ permissions:
   contents: read
 
 env:
-  # cy-pca/cvcpkg master with #623 (leveldb, websocketpp) plus the airdcpp-webui recipe (branch
-  # recipes-wtl-minizip-airdcpp-webui).
-  CVCPKG_DEPS_REF: 9c638dd74e952577e820705f48a737114c5e22bc
+  # cy-pca/cvcpkg master after #630 (airdcpp-webui) and #631 (snappy, leveldb with Snappy).
+  CVCPKG_DEPS_REF: 65b93b80c833d7e3465c2f69fcfe2d24133cf06d
   CC: gcc-12
   CXX: g++-12
 
@@ -62,6 +61,7 @@ jobs:
           sparse-checkout: |
             recipes/_common
             recipes/leveldb
+            recipes/snappy
             recipes/websocketpp
             recipes/airdcpp-webui
       - uses: ./.github/actions/setup-cvcpkg
