@@ -1,0 +1,30 @@
+name: Check the build tools come from cvcpkg
+description: >
+  Fails if Homebrew is still reachable, or if cmake, ninja or python3.12 resolve anywhere but
+  the cvcpkg prefix, with PATH as cvcpkg gives a build (the prefix first). build.sh itself runs
+  all three from the prefix by path.
+inputs:
+  prefix:
+    description: The cvcpkg prefix install-deps filled.
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+      run: |
+        set -euo pipefail
+        rc=0
+        if command -v brew >/dev/null 2>&1; then
+          echo "::error::Homebrew is still reachable: $(command -v brew)"; rc=1
+        fi
+        export PATH="$PREFIX/bin:$PATH"
+        for t in cmake ninja python3.12; do
+          got=$(command -v "$t" || true)
+          case "$got" in
+            "$PREFIX/bin/"*) echo "$t -> $got" ;;
+            *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($PREFIX/bin)"; rc=1 ;;
+          esac
+        done
+        exit "$rc"

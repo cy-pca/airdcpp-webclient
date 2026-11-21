@@ -4,12 +4,14 @@ name: cvcpkg publish
 # on master only: bump upstream_version (cvc_revision for a packaging-only change), merge, then
 # run this. cy-pca/sublevels' transfer tests install the bundle this publishes.
 #
-# The bundle is built as cvcpkg-recipe.yml builds it (ubuntu-22.04 for cvcpkg's glibc 2.35 floor,
-# GCC 12), with recipes/airdcpp-webclient/test.sh run on the staged tree before the pack, and its
-# dependencies taken from cvcpkg.org only: a bundle must never need something the registry cannot
-# give the person installing it. So it waits for leveldb, websocketpp and airdcpp-webui to be on
-# cvcpkg.org. After publishing, it is installed from cvcpkg.org into an empty prefix and
-# its test.sh runs again there.
+# Two bundles, each built as cvcpkg-recipe.yml builds it, with recipes/airdcpp-webclient/test.sh run
+# on the staged tree before the pack: linux-x86_64 on ubuntu-22.04 (cvcpkg's glibc 2.35 floor, GCC
+# 12) and macos-arm64 on macos-15 (Apple clang, with the image's Homebrew taken off PATH and moved
+# aside first, and the bundle's Mach-O load commands checked before it is published). Their
+# dependencies come from cvcpkg.org only: a bundle must never need something the registry cannot
+# give the person installing it. So both wait for leveldb, websocketpp and airdcpp-webui to be on
+# cvcpkg.org. After publishing, each is installed from cvcpkg.org into an empty prefix and its
+# test.sh runs again there. The jobs are independent; the linux one also pushes the recipe row.
 #
 # The token is the CVCPKG_PUBLISHER_TOKEN repository secret: a cvcpkg.org publisher that is a
 # member of the cy-pca organisation. Only the publish step sees it. Without it the job builds,
@@ -68,6 +70,60 @@ jobs:
           cvcpkg publish dist/airdcpp-webclient-[0-9]*.tar.gz --server https://cvcpkg.org --org cy-pca
           # The server-side recipe row (the package page, the dependency graph). An upsert.
           cvcpkg recipe push airdcpp-webclient --recipes-dir recipes --no-default-recipes \
+            --server https://cvcpkg.org --org cy-pca
+      - name: Install it from cvcpkg.org and test it there
+        run: |
+          set -euo pipefail
+          check="$RUNNER_TEMP/check"
+          cvcpkg install airdcpp-webclient --prefix "$check" --config release --link shared \
+            --no-fallback-to-source
+          CVC_INSTALL_DIR="$check" CVC_DEPS_PREFIX="$check" bash recipes/airdcpp-webclient/test.sh
+
+  airdcpp-webclient-macos:
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/remove-homebrew
+      - uses: ./.github/actions/setup-cvcpkg
+      - name: Dependencies (cvcpkg.org only)
+        run: |
+          set -euo pipefail
+          "$CXX" --version | head -1
+          for dep in leveldb websocketpp airdcpp-webui; do
+            cvcpkg info "$dep" >/dev/null 2>&1 \
+              || { echo "::error::$dep is not on cvcpkg.org yet; publishing nothing"; exit 1; }
+          done
+          cvcpkg install-deps airdcpp-webclient --recipes-dir recipes \
+            --prefix "$RUNNER_TEMP/prefix" --config release --link shared \
+            --no-fallback-to-source --include-host-tools
+      - uses: ./.github/actions/check-cvcpkg-tools
+        with:
+          prefix: ${{ runner.temp }}/prefix
+      - name: Build, test and pack
+        run: |
+          set -euo pipefail
+          cvcpkg pack airdcpp-webclient --local --recipes-dir recipes \
+            --prefix "$RUNNER_TEMP/prefix" --config release --link shared --output-dir dist
+          ls -l dist/
+      - uses: ./.github/actions/check-macos-bundle
+        with:
+          archive: dist/airdcpp-webclient-[0-9]*-macos-arm64-release-shared.tar.gz
+          unpack-dir: ${{ runner.temp }}/unpacked
+      - name: Publish
+        env:
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CVCPKG_TOKEN:-}" ]; then
+            echo "::error::no CVCPKG_PUBLISHER_TOKEN secret: the bundle packed but was not published"
+            exit 1
+          fi
+          cvcpkg publish dist/airdcpp-webclient-[0-9]*-macos-arm64-release-shared.tar.gz \
             --server https://cvcpkg.org --org cy-pca
       - name: Install it from cvcpkg.org and test it there
         run: |
