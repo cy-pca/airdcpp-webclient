@@ -1,5 +1,11 @@
 ![build](https://github.com/airdcpp-web/airdcpp-webclient/actions/workflows/build.yml/badge.svg)
 
+> **About this fork.** cy-pca/airdcpp-webclient is a fork of
+> [airdcpp-web/airdcpp-webclient](https://github.com/airdcpp-web/airdcpp-webclient) that holds the
+> [cvcpkg](https://cvcpkg.org) recipe for the AirDC++ web client (`recipes/airdcpp-webclient`,
+> built from upstream's release tags) and its CI. It carries no source changes; please report
+> bugs and send changes to the upstream project.
+
 # AirDC++ Web Client
 
 AirDC++ Web Client is a locally installed application, which is designed for flexible sharing of files or directories within groups of people in a local network or over internet. The daemon application can be installed on different types of systems, such as on file servers and NAS devices.

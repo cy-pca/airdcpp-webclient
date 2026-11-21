@@ -1,0 +1,83 @@
+name: cvcpkg recipe
+
+# Builds recipes/airdcpp-webclient as cvcpkg-publish.yml does, and throws the result away.
+# `cvcpkg pack` builds it into the prefix, runs recipes/airdcpp-webclient/test.sh on the staged
+# tree (the documented setup commands, then the daemon itself: its HTTP API answers with the
+# version, the Web UI's index is served, SIGTERM stops it cleanly), checks its globs, relocation
+# and glibc floor, and archives it. Nothing is published or uploaded.
+#
+# ubuntu-22.04 with GCC 12: cvcpkg's linux bundles must start on glibc 2.35, so `cvcpkg pack`
+# refuses one built on a newer glibc (24.04 has 2.39), and AirDC++ needs GCC 12 or newer for C++20.
+#
+# Any dependency cvcpkg.org does not have yet (airdcpp-webui, merged in cy-pca/cvcpkg#630, until
+# its bundle is published) is built from cy-pca/cvcpkg's recipes at CVCPKG_DEPS_REF, overlaid
+# with --recipes-dir; --fallback-to-source only builds what the registry lacks. Once cvcpkg.org
+# has them all, the overlay is unused and can go. Every other dependency and tool
+# (cmake, ninja, python312) is installed from cvcpkg.org.
+#
+# GitHub-hosted runners only: this repository is public, and a pull request's workflows must
+# never reach self-hosted runners.
+
+on:
+  pull_request:
+    paths:
+      - 'recipes/airdcpp-webclient/**'
+      - '.github/workflows/cvcpkg-recipe.yml'
+      - '.github/actions/setup-cvcpkg/**'
+  push:
+    branches: [master]
+    paths:
+      - 'recipes/airdcpp-webclient/**'
+      - '.github/workflows/cvcpkg-recipe.yml'
+      - '.github/actions/setup-cvcpkg/**'
+  workflow_dispatch:
+
+concurrency:
+  group: cvcpkg-recipe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # cy-pca/cvcpkg master after #630 (airdcpp-webui) and #631 (snappy, leveldb with Snappy).
+  CVCPKG_DEPS_REF: 65b93b80c833d7e3465c2f69fcfe2d24133cf06d
+  CC: gcc-12
+  CXX: g++-12
+
+jobs:
+  airdcpp-webclient:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recipes not on cvcpkg.org yet (cy-pca/cvcpkg)
+        uses: actions/checkout@v4
+        with:
+          repository: cy-pca/cvcpkg
+          ref: ${{ env.CVCPKG_DEPS_REF }}
+          path: .cvcpkg-deps
+          persist-credentials: false
+          sparse-checkout: |
+            recipes/_common
+            recipes/leveldb
+            recipes/snappy
+            recipes/websocketpp
+            recipes/airdcpp-webui
+      - uses: ./.github/actions/setup-cvcpkg
+      - name: Dependencies (cvcpkg.org; the unpublished ones from source)
+        run: |
+          set -euo pipefail
+          "$CXX" --version | head -1
+          cvcpkg install-deps airdcpp-webclient \
+            --recipes-dir .cvcpkg-deps/recipes --recipes-dir recipes \
+            --prefix "$RUNNER_TEMP/prefix" --config release --link shared \
+            --fallback-to-source --include-host-tools
+      - name: Build, test and pack
+        run: |
+          set -euo pipefail
+          cvcpkg pack airdcpp-webclient --local \
+            --recipes-dir .cvcpkg-deps/recipes --recipes-dir recipes \
+            --prefix "$RUNNER_TEMP/prefix" --config release --link shared --output-dir dist
+          ls -l dist/
+          ls dist/airdcpp-webclient-2.14.0+cvc.*-linux-x86_64-release-shared.tar.gz
